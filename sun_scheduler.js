@@ -11,12 +11,31 @@
  * MIT Licensed.
  */
 
-const SunCalc = require("suncalc");
 const CronJob = require("cron").CronJob;
 
 const DEFAULT_RECALCULATE = "0 5 0 * * *"; // every day at 00:05:00
 const EXPRESSION = /^([A-Za-z][A-Za-z0-9_]*)\s*(?:([+-])\s*(\d+(?:\.\d+)?)\s*(m|min|h)?)?$/;
 const addedEvents = new Set(); // custom events already registered with suncalc (survives browser reloads)
+let SunCalc = null; // suncalc is only loaded when a sun event is actually used
+let pendingEvents = []; // custom events from the config, registered when suncalc is loaded
+
+/**
+ * Loads suncalc on first use and registers any custom events from the config.
+ * Configs without sun events never call this, so suncalc is never loaded.
+ * @returns {object} the suncalc library
+ */
+function sunCalc() {
+	if (!SunCalc) SunCalc = require("suncalc");
+	for (const ev of pendingEvents) {
+		const key = ev.angle + "|" + ev.rise + "|" + ev.set;
+		if (!addedEvents.has(key)) {
+			SunCalc.addTime(ev.angle, ev.rise, ev.set);
+			addedEvents.add(key);
+		}
+	}
+	pendingEvents = [];
+	return SunCalc;
+}
 
 /**
  * Names of every sun event suncalc can calculate (built-in + custom), read from its
@@ -25,7 +44,7 @@ const addedEvents = new Set(); // custom events already registered with suncalc 
  */
 function eventNames() {
 	const names = ["solarNoon", "nadir"];
-	for (const t of SunCalc.times) names.push(t[1], t[2]);
+	for (const t of sunCalc().times) names.push(t[1], t[2]);
 	return names;
 }
 
@@ -43,13 +62,13 @@ function parse(expression) {
 }
 
 /**
- * Reads the location and registers custom events. Called on INITIALISE_SCHEDULER.
+ * Reads the `sun` settings. Called on INITIALISE_SCHEDULER. Does no sun calculation and
+ * doesn't load suncalc: custom events are only registered once a sun event is used.
  * The location comes only from this module's own `sun.lat` / `sun.lon` config.
  * @param {object} sunConfig the module's `sun` config (may be undefined)
- * @param {Function} log logger
  * @returns {object} settings: { lat, lon, recalculate } (lat/lon null when not set or invalid)
  */
-function configure(sunConfig, log) {
+function configure(sunConfig) {
 	const cfg = sunConfig || {};
 	const settings = { lat: null, lon: null, recalculate: cfg.recalculate || DEFAULT_RECALCULATE };
 
@@ -62,19 +81,15 @@ function configure(sunConfig, log) {
 		console.error("MMM-ModuleScheduler: sun.lat must be a number from -90 to 90 and sun.lon a number from -180 to 180 (got " + cfg.lat + ", " + cfg.lon + ")");
 	}
 
+	pendingEvents = [];
 	for (const ev of cfg.events || []) {
 		if (typeof ev.angle !== "number" || !ev.rise || !ev.set) {
 			console.error("MMM-ModuleScheduler: custom sun event needs angle, rise and set: " + JSON.stringify(ev));
 			continue;
 		}
-		const key = ev.angle + "|" + ev.rise + "|" + ev.set;
-		if (!addedEvents.has(key)) {
-			SunCalc.addTime(ev.angle, ev.rise, ev.set);
-			addedEvents.add(key);
-		}
+		pendingEvents.push(ev);
 	}
 
-	if (settings.lat !== null) log("MMM-ModuleScheduler: sun events use " + settings.lat + ", " + settings.lon + " from sun.lat / sun.lon");
 	return settings;
 }
 
@@ -86,10 +101,11 @@ function configure(sunConfig, log) {
  * @returns {Date|null} next occurrence, or null if the event doesn't happen in the next few days (polar day/night)
  */
 function nextOccurrence(parsed, settings, now) {
+	const calc = sunCalc();
 	// Yesterday's event can only still be ahead when a positive offset pushes it past midnight (e.g. "sunset+8h")
 	for (let dayOffset = parsed.offsetMs > 0 ? -1 : 0; dayOffset <= 3; dayOffset++) {
 		const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayOffset, 12, 0, 0); // local noon
-		const t = SunCalc.getTimes(day, settings.lat, settings.lon)[parsed.event];
+		const t = calc.getTimes(day, settings.lat, settings.lon)[parsed.event];
 		if (!t || isNaN(t)) continue;
 		const when = new Date(Math.round((t.getTime() + parsed.offsetMs) / 1000) * 1000);
 		if (when > now) return when;
@@ -119,6 +135,10 @@ class SunCronJob {
 		this.log = log;
 		this.eventJob = null;
 		this.cronTime = null;
+		if (!settings.announced) {
+			log("MMM-ModuleScheduler: sun events use " + settings.lat + ", " + settings.lon + " from sun.lat / sun.lon");
+			settings.announced = true;
+		}
 		// throws on an invalid recalculate expression -> caught by createCronJob
 		this.recalcJob = new CronJob(this.recalculateTime, () => this.recalculate(), null, true);
 		this.recalculate();

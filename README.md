@@ -356,7 +356,7 @@ At each recalculation, the next time of each sun event is worked out and the eve
 
 **Notes**
 
-- `lat` and `lon` are only needed if a sun event is used. Without sun events, no sun times are calculated and no extra timers are created.
+- `lat` and `lon` are only needed if a sun event is used. Without sun events, the suncalc library is not loaded, no sun times are calculated and no extra timers are created, even if the `sun` option is set.
 - Sun times use the system time zone of the device running MagicMirror, so make sure it is set correctly.
 - The calculated times are logged when MagicMirror starts and whenever they change, e.g. `"dusk" set to 17:09:26 daily ... recalculated on "0 5 0 * * *"`.
 - A misspelled event name or a missing location is logged as an error and that schedule is not created. As with an invalid cron expression, the remaining definitions in the same array are not scheduled either, so check the log after changing your config.

@@ -35,7 +35,7 @@ module.exports = NodeHelper.create({
 			this.log(this.name + " is setting the config");
 			this.config = payload;
 			this.removeScheduledJobs();
-			this.sunSettings = Sun.configure(payload.sun, console.log);
+			this.sunSettings = Sun.configure(payload.sun);
 			return true;
 		}
 		if (notification === "CREATE_NOTIFICATION_SCHEDULE") {
